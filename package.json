@@ -1,0 +1,1 @@
+{"name":"quizweb-workspace","private":true,"version":"1.0.0","type":"module","scripts":{"setup":"npm --prefix web install && npm --prefix web/quiz-server install","dev":"node scripts/dev.mjs","build":"npm --prefix web run build","import:exams":"npm --prefix web run import:exams"}}

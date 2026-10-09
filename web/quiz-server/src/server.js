@@ -1,0 +1,16 @@
+import 'dotenv/config';
+import cors from 'cors';
+import express from 'express';
+import mongoose from 'mongoose';
+import { examsRouter } from './routes/exams.js';
+import { initializeLocalStore, localRouter } from './localStore.js';
+const PORT = Number(process.env.PORT) || 3000;
+const mongo = Boolean(process.env.MONGODB_URI);
+const app = express();
+app.use(cors({ origin: (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map(s => s.trim()) }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, storage: mongo ? 'mongodb' : 'local', mongo: mongo && mongoose.connection.readyState === 1 }));
+app.use('/api/exams', mongo ? examsRouter : localRouter);
+app.use((err, _req, res, _next) => { console.error(err); res.status(err.status || 500).json({ error: err.message || 'Server error' }); });
+if (mongo) await mongoose.connect(process.env.MONGODB_URI);
+else await initializeLocalStore();
+app.listen(PORT, '127.0.0.1', () => console.log(`QuizWeb API: http://localhost:${PORT} (${mongo ? 'MongoDB' : 'local JSON storage'})`));
