@@ -16,9 +16,10 @@ function userPickToSet(pick: string[] | undefined): Set<string> {
 
 type Props = {
   apiBase: string;
+  onActiveExamChange?: (name: string | null) => void;
 };
 
-export function RandomQuizSection({ apiBase }: Props) {
+export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
   const [pool, setPool] = useState<PoolQuestionItem[]>([]);
   const [poolLoading, setPoolLoading] = useState(false);
   const [poolError, setPoolError] = useState<string | null>(null);
@@ -29,6 +30,11 @@ export function RandomQuizSection({ apiBase }: Props) {
 
   const [view, setView] = useState<View>("setup");
   const [quizItems, setQuizItems] = useState<PoolQuestionItem[]>([]);
+  useEffect(() => {
+    const sources = [...new Set(quizItems.map(item => item.sourceExam))];
+    onActiveExamChange?.(view === "quiz" ? `Đề ngẫu nhiên · ${sources.join(', ')}` : null);
+    return () => onActiveExamChange?.(null);
+  }, [view, quizItems, onActiveExamChange]);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, string[]>>({});
   const userAnswersRef = useRef(userAnswers);

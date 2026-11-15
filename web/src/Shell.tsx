@@ -5,6 +5,7 @@ import ThemePicker from './ThemePicker';
 export default function Shell() {
   const [page, setPage] = useState<'learn' | 'import'>('learn');
   const [revision, setRevision] = useState(0);
+  const [activeExamName, setActiveExamName] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [uploadFailed, setUploadFailed] = useState(false);
@@ -34,9 +35,9 @@ export default function Shell() {
       <div className="sidebar-bottom">QuizWeb / Study workspace</div>
     </aside>
     <main className="workspace-main">
-      <header className="topbar"><span className="topbar-location">Không gian cá nhân <span className="breadcrumb">/ {page === 'learn' ? 'Thư viện đề' : 'Nhập bộ đề'}</span></span><div className="topbar-tools"><ThemePicker /><span className="profile" aria-label="Không gian QuizWeb">QW</span></div></header>
+      <header className="topbar"><nav className="topbar-location" aria-label="Vị trí hiện tại"><span>Không gian cá nhân</span><span className="breadcrumb">/ {page === 'learn' ? 'Thư viện đề' : 'Nhập bộ đề'}</span>{page === 'learn' && activeExamName && <span className="breadcrumb active-exam" aria-current="page"><span aria-hidden="true">/ </span>{activeExamName}</span>}</nav><div className="topbar-tools"><ThemePicker /><span className="profile" aria-label="Không gian QuizWeb">QW</span></div></header>
       <div className="workspace-content">
-        {page === 'learn' ? <App key={revision} /> : <section className="import-page">
+        {page === 'learn' ? <App key={revision} onActiveExamChange={setActiveExamName} /> : <section className="import-page">
           <span className="eyebrow">THƯ VIỆN CỦA BẠN</span><h1>Thêm kiến thức.<br />Sẵn sàng ôn tập.</h1><p className="intro">Đặt tên bộ đề, chọn file câu hỏi và đáp án tương ứng. Mọi thứ đã sẵn sàng cho buổi học tiếp theo.</p>
           <form className="import-form" onSubmit={upload}>
             <label>Tên bộ đề<input name="examKey" required maxLength={512} placeholder="Ví dụ: PMG201c — Ôn tập cuối kỳ" /></label>

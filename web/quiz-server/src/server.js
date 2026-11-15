@@ -13,4 +13,4 @@ app.use('/api/exams', mongo ? examsRouter : localRouter);
 app.use((err, _req, res, _next) => { console.error(err); res.status(err.status || 500).json({ error: err.message || 'Server error' }); });
 if (mongo) await mongoose.connect(process.env.MONGODB_URI);
 else await initializeLocalStore();
-app.listen(PORT, '127.0.0.1', () => console.log(`QuizWeb API: http://localhost:${PORT} (${mongo ? 'MongoDB' : 'local JSON storage'})`));
+app.listen(PORT, '0.0.0.0', () => console.log(`QuizWeb API listening on port ${PORT} (${mongo ? 'MongoDB' : 'local JSON storage'})`));

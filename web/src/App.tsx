@@ -88,10 +88,16 @@ function shuffleArray<T>(arr: T[]): T[] {
   return out;
 }
 
-export default function App() {
+export default function App({ onActiveExamChange }: { onActiveExamChange?: (name: string | null) => void }) {
+  const [activeExamName, setActiveExamName] = useState<string | null>(null);
   const [homeTab, setHomeTab] = useState<HomeTab>("single");
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<View>("setup");
+
+  useEffect(() => {
+    onActiveExamChange?.(view === "setup" ? null : activeExamName);
+    return () => onActiveExamChange?.(null);
+  }, [view, activeExamName, onActiveExamChange]);
 
   const [serverExams, setServerExams] = useState<ExamListItem[]>([]);
   const [listLoading, setListLoading] = useState(true);
@@ -220,6 +226,7 @@ export default function App() {
           return;
         }
         const doc = (await r.json()) as {
+          examKey: string;
           questionsText: string;
           answersText: string;
           answersExtension?: string;
@@ -227,6 +234,7 @@ export default function App() {
         const ext = doc.answersExtension === "txt" ? ".txt" : ".csv";
         const nums = applyBundle(doc.questionsText, doc.answersText, `mongo${ext}`);
         if (!nums) return;
+        setActiveExamName(doc.examKey);
         if (mode === "quiz") {
           setView("quiz");
         } else if (mode === "flashcard") {
@@ -303,6 +311,7 @@ export default function App() {
         return;
       }
       setSimilarSlides(merged.slides);
+      setActiveExamName("Ôn câu tương tự · Nhiều bộ đề");
       setView("similar");
     } catch {
       setError("Lỗi tải same-question.txt hoặc API.");
@@ -695,7 +704,7 @@ export default function App() {
               ← Chọn bộ đề
             </button>
           </div>
-          <RandomQuizSection apiBase={API_BASE} />
+          <RandomQuizSection apiBase={API_BASE} onActiveExamChange={onActiveExamChange} />
         </>
       )}
 
