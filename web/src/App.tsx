@@ -27,6 +27,7 @@ type ExamListItem = { _id: string; examKey: string; updatedAt?: string; question
 type LearnMode = "quiz" | "flashcard" | "study" | "similar";
 
 const STUDY_BATCH_SIZE = 5;
+const AUTO_NEXT_DELAY_MS = 4000;
 
 const API_BASE = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, "") ?? "";
 
@@ -144,6 +145,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   const [studyQueue, setStudyQueue] = useState<number[]>([]);
   const [studyWrongInLastRound, setStudyWrongInLastRound] = useState(0);
   const [studyLocked, setStudyLocked] = useState<Record<number, boolean>>({});
+  const [autoNextKey, setAutoNextKey] = useState<number | null>(null);
 
   const [similarSlides, setSimilarSlides] = useState<SimilarSlide[]>([]);
 
@@ -170,6 +172,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       setStudyQueue([]);
       setStudyWrongInLastRound(0);
       setStudyLocked({});
+      setAutoNextKey(null);
       setError(null);
       return nums;
     },
@@ -186,6 +189,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     setCurrentIdx(0);
     setUserAnswers({});
     setStudyLocked({});
+    setAutoNextKey(null);
     setView("study");
   }, []);
 
@@ -329,6 +333,18 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     return !!data && isTrueFalseQuestion(data.options);
   });
 
+  const triggerAutoNext = () => {
+    if (view === "study") {
+      setAutoNextKey(Date.now());
+      return;
+    }
+    if (view === "quiz" && currentIdx < activeNumbers.length - 1) {
+      setAutoNextKey(Date.now());
+    } else {
+      setAutoNextKey(null);
+    }
+  };
+
   const saveSingle = (letter: string) => {
     if (qNum === undefined) return;
     if (view === "study" && studyLocked[qNum]) return;
@@ -336,6 +352,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     if (view === "study") {
       setStudyLocked((prev) => ({ ...prev, [qNum]: true }));
     }
+    triggerAutoNext();
   };
 
   const toggleMulti = (letter: string) => {
@@ -347,18 +364,25 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       const cur = new Set(prev[qNum] ?? []);
       if (cur.has(upper)) cur.delete(upper);
       else cur.add(upper);
-      if (view === "study" && cur.size >= chooseCount) {
-        setStudyLocked((locked) => ({ ...locked, [qNum]: true }));
+      if (cur.size >= chooseCount) {
+        if (view === "study") {
+          setStudyLocked((locked) => ({ ...locked, [qNum]: true }));
+        }
+        triggerAutoNext();
+      } else {
+        setAutoNextKey(null);
       }
       return { ...prev, [qNum]: [...cur].sort() };
     });
   };
 
   const goPrev = () => {
+    setAutoNextKey(null);
     if (currentIdx > 0) setCurrentIdx((i) => i - 1);
   };
 
   const goNext = () => {
+    setAutoNextKey(null);
     if (view === "study" && currentIdx >= activeNumbers.length - 1) {
       submitStudyRound();
       return;
@@ -422,6 +446,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     setStudyQueue(rest);
     setCurrentIdx(0);
     setStudyLocked({});
+    setAutoNextKey(null);
     setUserAnswers((prev) => {
       const copied = { ...prev };
       for (const n of nextRoundNums) delete copied[n];
@@ -430,6 +455,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   };
 
   const restartCurrentPractice = () => {
+    setAutoNextKey(null);
     if (view === "study") {
       startStudySession(qNumbers);
       setResultText(null);
@@ -443,6 +469,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   };
 
   const shuffleCurrentPractice = () => {
+    setAutoNextKey(null);
     const shuffled = shuffleArray(qNumbers);
     if (!trueFalseOnlyActive) {
       setAllQNumbers(shuffled);
@@ -462,6 +489,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
 
   const useOnlyTrueFalse = () => {
     if (trueFalseNumbers.length <= 5) return;
+    setAutoNextKey(null);
     const next = trueFalseOnlyActive ? allQNumbers : trueFalseNumbers;
     setTrueFalseOnlyActive(!trueFalseOnlyActive);
     setQNumbers(next);
@@ -472,6 +500,23 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       startStudySession(next);
     }
   };
+
+  useEffect(() => {
+    if (autoNextKey === null) return;
+    if (view !== "quiz" && view !== "study") {
+      setAutoNextKey(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAutoNextKey(null);
+      if (view === "study" && currentIdx >= activeNumbers.length - 1) {
+        submitStudyRound();
+      } else if (currentIdx < activeNumbers.length - 1) {
+        setCurrentIdx((i) => i + 1);
+      }
+    }, AUTO_NEXT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [autoNextKey, view, currentIdx, activeNumbers.length, submitStudyRound]);
 
   useEffect(() => {
     if (view !== "quiz" && view !== "flashcard" && view !== "study") return;
@@ -487,10 +532,12 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       if (view === "quiz" || view === "study") {
         if (e.key === "ArrowLeft") {
           e.preventDefault();
+          setAutoNextKey(null);
           setCurrentIdx((i) => (i > 0 ? i - 1 : i));
         }
         if (e.key === "ArrowRight") {
           e.preventDefault();
+          setAutoNextKey(null);
           if (view === "study" && currentIdx >= maxIdx) {
             submitStudyRound();
           } else {
@@ -499,6 +546,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
         }
         if (view === "study" && e.key === "Enter") {
           e.preventDefault();
+          setAutoNextKey(null);
           submitStudyRound();
         }
       }
@@ -819,6 +867,26 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
                     .join(" | ")}
                 </span>
               )}
+            </div>
+          )}
+          {autoNextKey !== null && (
+            <div key={autoNextKey} className="auto-next-bar" role="status" aria-live="polite">
+              <div className="auto-next-bar__header">
+                <span className="auto-next-bar__label">
+                  {view === "study" && currentIdx >= activeNumbers.length - 1
+                    ? "Tự động qua lượt tiếp theo sau 4 giây…"
+                    : "Tự động chuyển sang câu tiếp theo sau 4 giây…"}
+                </span>
+                <button type="button" className="auto-next-bar__cancel" onClick={() => setAutoNextKey(null)}>
+                  Dừng
+                </button>
+              </div>
+              <div className="auto-next-bar__track">
+                <div
+                  className="auto-next-bar__fill"
+                  style={{ animationDuration: `${AUTO_NEXT_DELAY_MS}ms` }}
+                />
+              </div>
             </div>
           )}
           <div className="quiz-nav-footer">

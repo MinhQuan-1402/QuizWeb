@@ -112,6 +112,14 @@ body { background: var(--page); color: var(--text); }
 .option-card:has(.option-input:checked) { background: var(--accent-soft); border-color: var(--accent); }
 .option-card.option-card--correct { background: var(--success-bg); border-color: var(--success-border); }
 .option-card.option-card--wrong { background: var(--danger-bg); border-color: var(--danger-border); }
+.auto-next-bar { margin-top: 16px; padding: 12px 15px; border-radius: 10px; background: var(--surface-soft); border: 1px solid var(--border); }
+.auto-next-bar__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 9px; }
+.auto-next-bar__label { font-size: 12px; color: var(--muted); font-weight: 500; }
+.auto-next-bar__cancel { border: 1px solid var(--border); border-radius: 7px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; background: var(--surface); color: var(--muted); }
+.auto-next-bar__cancel:hover { border-color: var(--border-hover); color: var(--text); }
+.auto-next-bar__track { width: 100%; height: 6px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.auto-next-bar__fill { height: 100%; width: 0%; border-radius: 999px; background: var(--success); animation-name: autoNextProgress; animation-timing-function: linear; animation-fill-mode: forwards; }
+@keyframes autoNextProgress { from { width: 0%; } to { width: 100%; } }
 .quiz-tip { background: var(--surface-soft); border: 1px solid var(--border); color: var(--muted); border-radius: 10px; }
 .btn-nav-prev,.btn-ghost,.btn-submit-grade,.btn-nav-next,.btn-primary,.btn-load,.btn-flash { border-radius: 9px; padding: 11px 17px; }
 .btn-primary,.btn-nav-next,.btn-load { color: #fff; }

@@ -6,6 +6,8 @@ type ExamListItem = { _id: string; examKey: string };
 
 type View = "setup" | "quiz";
 
+const AUTO_NEXT_DELAY_MS = 4000;
+
 function apiUrl(base: string, path: string) {
   return `${base.replace(/\/$/, "")}${path}`;
 }
@@ -40,6 +42,7 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
   const userAnswersRef = useRef(userAnswers);
   userAnswersRef.current = userAnswers;
   const [resultText, setResultText] = useState<string | null>(null);
+  const [autoNextKey, setAutoNextKey] = useState<number | null>(null);
 
   const loadPool = useCallback(async () => {
     setPoolLoading(true);
@@ -101,10 +104,19 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
     setQuizItems(picked);
     setCurrentIdx(0);
     setUserAnswers({});
+    setAutoNextKey(null);
     setView("quiz");
   };
 
   const item = quizItems[currentIdx];
+
+  const triggerAutoNext = useCallback(() => {
+    if (currentIdx < quizItems.length - 1) {
+      setAutoNextKey(Date.now());
+    } else {
+      setAutoNextKey(null);
+    }
+  }, [currentIdx, quizItems.length]);
 
   const saveSingle = useCallback(
     (letter: string) => {
@@ -114,8 +126,9 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
         ...prev,
         [it.id]: letter ? [letter.toUpperCase()] : [],
       }));
+      triggerAutoNext();
     },
-    [quizItems, currentIdx]
+    [quizItems, currentIdx, triggerAutoNext]
   );
 
   const toggleMulti = useCallback(
@@ -123,15 +136,34 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
       const it = quizItems[currentIdx];
       if (!it) return;
       const upper = letter.toUpperCase();
+      const chooseCount = it.chooseCount ?? 1;
       setUserAnswers((prev) => {
         const cur = new Set(prev[it.id] ?? []);
         if (cur.has(upper)) cur.delete(upper);
         else cur.add(upper);
+        if (cur.size >= chooseCount) {
+          queueMicrotask(() => triggerAutoNext());
+        } else {
+          queueMicrotask(() => setAutoNextKey(null));
+        }
         return { ...prev, [it.id]: [...cur].sort() };
       });
     },
-    [quizItems, currentIdx]
+    [quizItems, currentIdx, triggerAutoNext]
   );
+
+  useEffect(() => {
+    if (autoNextKey === null) return;
+    if (view !== "quiz" || currentIdx >= quizItems.length - 1) {
+      setAutoNextKey(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setAutoNextKey(null);
+      setCurrentIdx((i) => Math.min(quizItems.length - 1, i + 1));
+    }, AUTO_NEXT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [autoNextKey, view, currentIdx, quizItems.length]);
 
   const submitQuiz = useCallback(() => {
     const answersNow = userAnswersRef.current;
@@ -168,14 +200,17 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
         return;
       if (e.key === "ArrowLeft") {
         e.preventDefault();
+        setAutoNextKey(null);
         setCurrentIdx((i) => (i > 0 ? i - 1 : i));
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
+        setAutoNextKey(null);
         setCurrentIdx((i) => (i < maxIdx ? i + 1 : i));
       }
       if (e.key === "Enter") {
         e.preventDefault();
+        setAutoNextKey(null);
         submitQuiz();
       }
       const char = (e.key.length === 1 ? e.key : "").toUpperCase();
@@ -330,23 +365,52 @@ export function RandomQuizSection({ apiBase, onActiveExamChange }: Props) {
               </label>
             ))}
       </div>
+      {autoNextKey !== null && (
+        <div key={autoNextKey} className="auto-next-bar" role="status" aria-live="polite">
+          <div className="auto-next-bar__header">
+            <span className="auto-next-bar__label">Tự động chuyển sang câu tiếp theo sau 4 giây…</span>
+            <button type="button" className="auto-next-bar__cancel" onClick={() => setAutoNextKey(null)}>
+              Dừng
+            </button>
+          </div>
+          <div className="auto-next-bar__track">
+            <div
+              className="auto-next-bar__fill"
+              style={{ animationDuration: `${AUTO_NEXT_DELAY_MS}ms` }}
+            />
+          </div>
+        </div>
+      )}
       <div className="quiz-nav-footer">
         <button
           type="button"
           className="btn-nav-prev"
-          onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))}
+          onClick={() => {
+            setAutoNextKey(null);
+            setCurrentIdx((i) => Math.max(0, i - 1));
+          }}
           disabled={currentIdx === 0}
         >
           ← Trước
         </button>
         <div className="quiz-nav-footer__right">
-          <button type="button" className="btn-submit-grade" onClick={submitQuiz}>
+          <button
+            type="button"
+            className="btn-submit-grade"
+            onClick={() => {
+              setAutoNextKey(null);
+              submitQuiz();
+            }}
+          >
             Nộp bài &amp; chấm điểm
           </button>
           <button
             type="button"
             className="btn-nav-next"
-            onClick={() => setCurrentIdx((i) => Math.min(quizItems.length - 1, i + 1))}
+            onClick={() => {
+              setAutoNextKey(null);
+              setCurrentIdx((i) => Math.min(quizItems.length - 1, i + 1));
+            }}
             disabled={currentIdx >= quizItems.length - 1}
           >
             Tiếp →

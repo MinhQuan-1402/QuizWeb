@@ -3,6 +3,7 @@ import { setsEqual } from "./parseQuiz";
 import type { SimilarSlide } from "./similarQuestions";
 
 const SIMILAR_BATCH_SIZE = 5;
+const AUTO_NEXT_DELAY_MS = 4000;
 
 type Props = {
   slides: SimilarSlide[];
@@ -26,6 +27,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
   const [resultText, setResultText] = useState<string | null>(null);
+  const [autoNextKey, setAutoNextKey] = useState<number | null>(null);
 
   const roundRef = useRef(roundSlides);
   roundRef.current = roundSlides;
@@ -49,6 +51,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     setUserAnswers({});
     setLocked({});
     setResultText(null);
+    setAutoNextKey(null);
   }, [slides]);
 
   const slide = roundSlides[currentIdx];
@@ -93,6 +96,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     setQueue(rest);
     setCurrentIdx(0);
     setLocked({});
+    setAutoNextKey(null);
     setUserAnswers((prev) => {
       const copied = { ...prev };
       for (const s of nextRound) delete copied[s.item.id];
@@ -112,6 +116,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     setUserAnswers({});
     setLocked({});
     setResultText(null);
+    setAutoNextKey(null);
   }, [slides]);
 
   const saveSingle = useCallback(
@@ -123,6 +128,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
         [it.id]: letter ? [letter.toUpperCase()] : [],
       }));
       setLocked((prev) => ({ ...prev, [it.id]: true }));
+      setAutoNextKey(Date.now());
     },
     [roundSlides, currentIdx]
   );
@@ -138,7 +144,12 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
         if (cur.has(upper)) cur.delete(upper);
         else cur.add(upper);
         if (cur.size >= chooseCount) {
-          queueMicrotask(() => setLocked((lk) => ({ ...lk, [it.id]: true })));
+          queueMicrotask(() => {
+            setLocked((lk) => ({ ...lk, [it.id]: true }));
+            setAutoNextKey(Date.now());
+          });
+        } else {
+          queueMicrotask(() => setAutoNextKey(null));
         }
         return { ...prev, [it.id]: [...cur].sort() };
       });
@@ -147,16 +158,26 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
   );
 
   const goPrev = () => {
+    setAutoNextKey(null);
     if (currentIdx > 0) setCurrentIdx((i) => i - 1);
   };
 
-  const goNext = () => {
+  const goNext = useCallback(() => {
+    setAutoNextKey(null);
     if (currentIdx >= roundSlides.length - 1) {
       submitSimilarRound();
       return;
     }
     setCurrentIdx((i) => i + 1);
-  };
+  }, [currentIdx, roundSlides.length, submitSimilarRound]);
+
+  useEffect(() => {
+    if (autoNextKey === null) return;
+    const timer = window.setTimeout(() => {
+      goNext();
+    }, AUTO_NEXT_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [autoNextKey, goNext]);
 
   useEffect(() => {
     if (!roundSlides.length) return;
@@ -170,10 +191,12 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
         return;
       if (e.key === "ArrowLeft") {
         e.preventDefault();
+        setAutoNextKey(null);
         setCurrentIdx((i) => (i > 0 ? i - 1 : i));
       }
       if (e.key === "ArrowRight") {
         e.preventDefault();
+        setAutoNextKey(null);
         setCurrentIdx((i) => {
           if (i >= maxIdx) {
             submitSimilarRound();
@@ -184,6 +207,7 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
       }
       if (e.key === "Enter") {
         e.preventDefault();
+        setAutoNextKey(null);
         submitSimilarRound();
       }
       const char = (e.key.length === 1 ? e.key : "").toUpperCase();
@@ -314,6 +338,26 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
       {isLocked && (
         <div className="similar-hint-box" role="note">
           <strong>Gợi ý khác biệt</strong> (so với câu mẫu trong nhóm): {slide.hint}
+        </div>
+      )}
+      {autoNextKey !== null && (
+        <div key={autoNextKey} className="auto-next-bar" role="status" aria-live="polite">
+          <div className="auto-next-bar__header">
+            <span className="auto-next-bar__label">
+              {currentIdx >= roundSlides.length - 1
+                ? "Tự động qua lượt tiếp theo sau 4 giây…"
+                : "Tự động chuyển sang câu tiếp theo sau 4 giây…"}
+            </span>
+            <button type="button" className="auto-next-bar__cancel" onClick={() => setAutoNextKey(null)}>
+              Dừng
+            </button>
+          </div>
+          <div className="auto-next-bar__track">
+            <div
+              className="auto-next-bar__fill"
+              style={{ animationDuration: `${AUTO_NEXT_DELAY_MS}ms` }}
+            />
+          </div>
         </div>
       )}
       <div className="quiz-nav-footer">
