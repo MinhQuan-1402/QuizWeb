@@ -89,6 +89,25 @@ function shuffleArray<T>(arr: T[]): T[] {
   return out;
 }
 
+function extractExamSubject(examKey: string): string | null {
+  const m = examKey.match(/\b([A-Za-z]{3}\d{3}[A-Za-z]?)\b/i);
+  if (m) return m[1]!.toUpperCase();
+  const prefix = examKey.split(/[-_\s]+/)[0]?.trim();
+  if (prefix && /^[A-Za-z]{2,5}$/.test(prefix) && !/^(SP|SU|FA|FE|RE)$/i.test(prefix)) {
+    return prefix.toUpperCase();
+  }
+  return null;
+}
+
+function extractExamTerm(examKey: string): string | null {
+  const m = examKey.match(/\b(SP|SU|FA|SPR|SUM|FAL)\s*[-_]?\s*(\d{2}|\d{4})\b/i);
+  if (!m) return null;
+  const rawSeason = m[1]!.toUpperCase().slice(0, 2);
+  const rawYear = m[2]!;
+  const year2 = rawYear.length === 4 ? rawYear.slice(2) : rawYear;
+  return `${rawSeason}${year2}`;
+}
+
 export default function App({ onActiveExamChange }: { onActiveExamChange?: (name: string | null) => void }) {
   const [activeExamName, setActiveExamName] = useState<string | null>(null);
   const [homeTab, setHomeTab] = useState<HomeTab>("single");
@@ -106,6 +125,10 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   const [deletingExamId, setDeletingExamId] = useState<string | null>(null);
   const [libraryNotice, setLibraryNotice] = useState('');
   const [learnMode, setLearnMode] = useState<LearnMode>("quiz");
+  const [filterQuery, setFilterQuery] = useState("");
+  const [filterSubject, setFilterSubject] = useState("ALL");
+  const [filterTerm, setFilterTerm] = useState("ALL");
+  const [filterCount, setFilterCount] = useState("ALL");
   const examsListReadyRef = useRef(false);
 
   async function deleteExam(exam: ExamListItem) {
@@ -577,6 +600,75 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   const showStudyFeedback = view === "study" && qNum !== undefined && studyLocked[qNum];
   const studyAnsweredCorrectly = setsEqual(currentUserSet, currentCorrectSet);
 
+  const availableSubjects = Array.from(
+    new Set(
+      serverExams
+        .map((e) => extractExamSubject(e.examKey))
+        .filter((s): s is string => Boolean(s))
+    )
+  ).sort();
+
+  const availableTerms = Array.from(
+    new Set(
+      serverExams
+        .map((e) => extractExamTerm(e.examKey))
+        .filter((t): t is string => Boolean(t))
+    )
+  ).sort((a, b) => {
+    const ya = parseInt(a.slice(2), 10) || 0;
+    const yb = parseInt(b.slice(2), 10) || 0;
+    if (ya !== yb) return yb - ya;
+    const order: Record<string, number> = { FA: 3, SU: 2, SP: 1 };
+    return (order[b.slice(0, 2)] ?? 0) - (order[a.slice(0, 2)] ?? 0);
+  });
+
+  const availableCounts = Array.from(
+    new Set(
+      serverExams
+        .map((e) => e.questionCount ?? 0)
+        .filter((c) => c > 0)
+    )
+  ).sort((a, b) => a - b);
+
+  const hasActiveFilter =
+    filterQuery.trim() !== "" ||
+    filterSubject !== "ALL" ||
+    filterTerm !== "ALL" ||
+    filterCount !== "ALL";
+
+  const filteredExams = serverExams.filter((e) => {
+    const q = filterQuery.trim().toLowerCase();
+    if (q) {
+      const tokens = q.split(/\s+/).filter(Boolean);
+      const hay = `${e.examKey} ${e.questionCount ?? ""} ${extractExamTerm(e.examKey) ?? ""} ${extractExamSubject(e.examKey) ?? ""}`.toLowerCase();
+      if (!tokens.every((tk) => hay.includes(tk))) return false;
+    }
+    if (filterSubject !== "ALL" && extractExamSubject(e.examKey) !== filterSubject) {
+      return false;
+    }
+    if (filterTerm !== "ALL" && extractExamTerm(e.examKey) !== filterTerm) {
+      return false;
+    }
+    if (filterCount !== "ALL") {
+      const qc = e.questionCount ?? 0;
+      if (filterCount === "LE30" && !(qc > 0 && qc <= 30)) return false;
+      if (filterCount === "31_50" && !(qc >= 31 && qc <= 50)) return false;
+      if (filterCount === "GT50" && !(qc > 50)) return false;
+      if (filterCount.startsWith("EXACT_")) {
+        const target = parseInt(filterCount.slice(6), 10);
+        if (qc !== target) return false;
+      }
+    }
+    return true;
+  });
+
+  const resetFilters = () => {
+    setFilterQuery("");
+    setFilterSubject("ALL");
+    setFilterTerm("ALL");
+    setFilterCount("ALL");
+  };
+
   return (
     <>
       {view === "setup" && homeTab === "single" && (
@@ -648,52 +740,169 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
           )}
 
           {learnMode !== "similar" && !listLoading && serverExams.length > 0 && (
-            <div className="path-grid">
-              {serverExams.map((e, idx) => {
-                const theme = CARD_THEMES[idx % CARD_THEMES.length]!;
-                const mins = estimateMinutes(e.questionCount);
-                const qc = e.questionCount ?? 0;
-                return (
-                  <article key={e._id} className={`learning-card ${theme.variant}`}>
-                    <span className="learning-card__badge">{CARD_BADGE}</span>
-                    <h2 className="learning-card__title">{e.examKey}</h2>
-                    <p className="learning-card__desc">{examCardDescription(e.examKey)}</p>
-                    <hr className="learning-card__rule" />
-                    <div className="learning-card__stats">
-                      <div>
-                        <span className={`learning-card__stat-val ${theme.stat}`}>{qc > 0 ? qc : "—"}</span>
-                        <span className="learning-card__stat-label">Câu hỏi</span>
-                      </div>
-                      <div>
-                        <span className={`learning-card__stat-val ${theme.stat}`}>~{mins} phút</span>
-                        <span className="learning-card__stat-label">Ước lượng</span>
-                      </div>
-                    </div>
+            <>
+              <div className="exam-filter-bar" role="search" aria-label="Bộ lọc bộ đề">
+                <div className="exam-filter-bar__search">
+                  <input
+                    type="search"
+                    className="exam-filter-input"
+                    placeholder="Tìm theo tên đề, mã môn (HCM202, MLN131…), kỳ (SU26, FA25, B5, C1) hoặc số câu…"
+                    value={filterQuery}
+                    onChange={(e) => setFilterQuery(e.target.value)}
+                    aria-label="Tìm kiếm theo tên đề, kỳ hoặc số câu"
+                  />
+                </div>
+                <div className="exam-filter-bar__controls">
+                  {availableSubjects.length > 0 && (
+                    <select
+                      className="exam-filter-select"
+                      value={filterSubject}
+                      onChange={(e) => setFilterSubject(e.target.value)}
+                      aria-label="Lọc theo môn"
+                    >
+                      <option value="ALL">Tất cả môn ({availableSubjects.length})</option>
+                      {availableSubjects.map((subj) => (
+                        <option key={subj} value={subj}>
+                          Môn: {subj}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <select
+                    className="exam-filter-select"
+                    value={filterTerm}
+                    onChange={(e) => setFilterTerm(e.target.value)}
+                    aria-label="Lọc theo kỳ"
+                  >
+                    <option value="ALL">Tất cả kỳ</option>
+                    {availableTerms.map((term) => (
+                      <option key={term} value={term}>
+                        Kỳ: {term}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    className="exam-filter-select"
+                    value={filterCount}
+                    onChange={(e) => setFilterCount(e.target.value)}
+                    aria-label="Lọc theo số câu"
+                  >
+                    <option value="ALL">Mọi số câu</option>
+                    {availableCounts.map((c) => (
+                      <option key={c} value={`EXACT_${c}`}>
+                        Đúng {c} câu
+                      </option>
+                    ))}
+                    <option value="LE30">≤ 30 câu</option>
+                    <option value="31_50">31 – 50 câu</option>
+                    <option value="GT50">&gt; 50 câu</option>
+                  </select>
+                  {hasActiveFilter && (
                     <button
                       type="button"
-                      className="learning-card__start"
-                      disabled={serverLoading || deletingExamId !== null}
-                      onClick={() =>
-                        void startExamFromCard(e._id, learnMode as Exclude<LearnMode, "similar">)
-                      }
+                      className="exam-filter-reset"
+                      onClick={resetFilters}
                     >
-                      {learnMode === "quiz"
-                        ? "Bắt đầu Quiz"
-                        : learnMode === "flashcard"
-                          ? "Bắt đầu Flashcard"
-                          : "Bắt đầu Học"}
-                      <StartArrowIcon />
+                      Xóa lọc
                     </button>
-                    <button type="button" className="learning-card__delete"
-                      aria-label={`Xóa bộ đề ${e.examKey}`}
-                      disabled={serverLoading || deletingExamId !== null}
-                      onClick={() => void deleteExam(e)}>
-                      {deletingExamId === e._id ? 'Đang xóa…' : 'Xóa bộ đề'}
-                    </button>
-                  </article>
-                );
-              })}
-            </div>
+                  )}
+                </div>
+                <div className="exam-filter-bar__meta">
+                  <span>
+                    Hiển thị <strong>{filteredExams.length}</strong> / {serverExams.length} bộ đề
+                  </span>
+                  {availableTerms.length > 0 && (
+                    <div className="exam-filter-chips" aria-label="Chọn nhanh kỳ học">
+                      <button
+                        type="button"
+                        className={`exam-filter-chip${filterTerm === "ALL" ? " exam-filter-chip--active" : ""}`}
+                        onClick={() => setFilterTerm("ALL")}
+                      >
+                        Tất cả
+                      </button>
+                      {availableTerms.map((term) => (
+                        <button
+                          key={term}
+                          type="button"
+                          className={`exam-filter-chip${filterTerm === term ? " exam-filter-chip--active" : ""}`}
+                          onClick={() => setFilterTerm(filterTerm === term ? "ALL" : term)}
+                        >
+                          {term}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {filteredExams.length === 0 ? (
+                <div className="path-empty">
+                  <strong>Không tìm thấy bộ đề phù hợp</strong>
+                  <p>Không có bộ đề nào khớp với điều kiện lọc hiện tại. Hãy thử từ khóa hoặc bộ lọc khác.</p>
+                  <button
+                    type="button"
+                    className="btn-ghost"
+                    style={{ marginTop: 14 }}
+                    onClick={resetFilters}
+                  >
+                    Đặt lại bộ lọc
+                  </button>
+                </div>
+              ) : (
+                <div className="path-grid">
+                  {filteredExams.map((e, idx) => {
+                    const theme = CARD_THEMES[idx % CARD_THEMES.length]!;
+                    const mins = estimateMinutes(e.questionCount);
+                    const qc = e.questionCount ?? 0;
+                    const termTag = extractExamTerm(e.examKey);
+                    const subjectTag = extractExamSubject(e.examKey);
+                    return (
+                      <article key={e._id} className={`learning-card ${theme.variant}`}>
+                        <div className="learning-card__badges">
+                          <span className="learning-card__badge">{CARD_BADGE}</span>
+                          {subjectTag && <span className="learning-card__tag">{subjectTag}</span>}
+                          {termTag && <span className="learning-card__tag learning-card__tag--term">{termTag}</span>}
+                        </div>
+                        <h2 className="learning-card__title">{e.examKey}</h2>
+                        <p className="learning-card__desc">{examCardDescription(e.examKey)}</p>
+                        <hr className="learning-card__rule" />
+                        <div className="learning-card__stats">
+                          <div>
+                            <span className={`learning-card__stat-val ${theme.stat}`}>{qc > 0 ? qc : "—"}</span>
+                            <span className="learning-card__stat-label">Câu hỏi</span>
+                          </div>
+                          <div>
+                            <span className={`learning-card__stat-val ${theme.stat}`}>~{mins} phút</span>
+                            <span className="learning-card__stat-label">Ước lượng</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="learning-card__start"
+                          disabled={serverLoading || deletingExamId !== null}
+                          onClick={() =>
+                            void startExamFromCard(e._id, learnMode as Exclude<LearnMode, "similar">)
+                          }
+                        >
+                          {learnMode === "quiz"
+                            ? "Bắt đầu Quiz"
+                            : learnMode === "flashcard"
+                              ? "Bắt đầu Flashcard"
+                              : "Bắt đầu Học"}
+                          <StartArrowIcon />
+                        </button>
+                        <button type="button" className="learning-card__delete"
+                          aria-label={`Xóa bộ đề ${e.examKey}`}
+                          disabled={serverLoading || deletingExamId !== null}
+                          onClick={() => void deleteExam(e)}>
+                          {deletingExamId === e._id ? 'Đang xóa…' : 'Xóa bộ đề'}
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+            </>
           )}
 
           {learnMode === "similar" && !listLoading && serverExams.length === 0 && (
