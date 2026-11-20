@@ -361,11 +361,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       setAutoNextKey(Date.now());
       return;
     }
-    if (view === "quiz" && currentIdx < activeNumbers.length - 1) {
-      setAutoNextKey(Date.now());
-    } else {
-      setAutoNextKey(null);
-    }
+    setAutoNextKey(null);
   };
 
   const saveSingle = (letter: string) => {
@@ -526,15 +522,15 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
 
   useEffect(() => {
     if (autoNextKey === null) return;
-    if (view !== "quiz" && view !== "study") {
+    if (view !== "study") {
       setAutoNextKey(null);
       return;
     }
     const timer = window.setTimeout(() => {
       setAutoNextKey(null);
-      if (view === "study" && currentIdx >= activeNumbers.length - 1) {
+      if (currentIdx >= activeNumbers.length - 1) {
         submitStudyRound();
-      } else if (currentIdx < activeNumbers.length - 1) {
+      } else {
         setCurrentIdx((i) => i + 1);
       }
     }, AUTO_NEXT_DELAY_MS);
@@ -1078,11 +1074,11 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
               )}
             </div>
           )}
-          {autoNextKey !== null && (
+          {view === "study" && autoNextKey !== null && (
             <div key={autoNextKey} className="auto-next-bar" role="status" aria-live="polite">
               <div className="auto-next-bar__header">
                 <span className="auto-next-bar__label">
-                  {view === "study" && currentIdx >= activeNumbers.length - 1
+                  {currentIdx >= activeNumbers.length - 1
                     ? "Tự động qua lượt tiếp theo sau 4 giây…"
                     : "Tự động chuyển sang câu tiếp theo sau 4 giây…"}
                 </span>
