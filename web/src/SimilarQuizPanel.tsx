@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { setsEqual } from "./parseQuiz";
 import type { SimilarSlide } from "./similarQuestions";
+import { StudyLiveBar, StudySummaryScreen } from "./StudySummaryView";
+import {
+  computeStudySummary,
+  createInitialStudyStats,
+  recordStudyAttemptInMap,
+  type StudyQuestionMeta,
+  type StudyStatsMap,
+} from "./studyStats";
 
 const SIMILAR_BATCH_SIZE = 5;
 const AUTO_NEXT_DELAY_MS = 4000;
@@ -14,8 +22,26 @@ function userPickToSet(pick: string[] | undefined): Set<string> {
   return new Set((pick ?? []).map((x) => x.toUpperCase()));
 }
 
+function buildSimilarMeta(slide: SimilarSlide, order: number): StudyQuestionMeta {
+  const it = slide.item;
+  const correctAnswers = [...it.answer]
+    .sort()
+    .map((k) => {
+      const optText = it.options.find(([opt]) => opt === k)?.[1] ?? "";
+      return optText ? `${k}. ${optText}` : k;
+    });
+  return {
+    id: it.id,
+    label: `[${it.sourceExam}] Q${it.qNum}`,
+    question: it.question,
+    correctAnswers,
+    order,
+  };
+}
+
 export function SimilarQuizPanel({ slides, onBack }: Props) {
   const [studyRound, setStudyRound] = useState(1);
+  const [deckSlides, setDeckSlides] = useState<SimilarSlide[]>([]);
   const [roundSlides, setRoundSlides] = useState<SimilarSlide[]>([]);
   const [queue, setQueue] = useState<SimilarSlide[]>([]);
   const [wrongInLastRound, setWrongInLastRound] = useState(0);
@@ -26,23 +52,27 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
   const [locked, setLocked] = useState<Record<string, boolean>>({});
   const lockedRef = useRef(locked);
   lockedRef.current = locked;
-  const [resultText, setResultText] = useState<string | null>(null);
+  const [studyStats, setStudyStats] = useState<StudyStatsMap>({});
+  const [completed, setCompleted] = useState(false);
+  const completedRef = useRef(completed);
+  completedRef.current = completed;
+  const recordedInRoundRef = useRef<Record<string, boolean>>({});
+  const metaMapRef = useRef<Record<string, StudyQuestionMeta>>({});
   const [autoNextKey, setAutoNextKey] = useState<number | null>(null);
 
   const roundRef = useRef(roundSlides);
   roundRef.current = roundSlides;
   const queueRef = useRef(queue);
   queueRef.current = queue;
-  const totalDeckRef = useRef(0);
 
-  const deckSigRef = useRef("");
-  useLayoutEffect(() => {
-    const sig = slides.map((s) => s.item.id).join("|");
-    if (!sig || sig === deckSigRef.current) return;
-    deckSigRef.current = sig;
-    totalDeckRef.current = slides.length;
-    const first = slides.slice(0, SIMILAR_BATCH_SIZE);
-    const rest = slides.slice(first.length);
+  const initSession = useCallback((targetSlides: SimilarSlide[]) => {
+    const metas = targetSlides.map((s, idx) => buildSimilarMeta(s, idx));
+    const map: Record<string, StudyQuestionMeta> = {};
+    for (const m of metas) map[m.id] = m;
+    metaMapRef.current = map;
+    const first = targetSlides.slice(0, SIMILAR_BATCH_SIZE);
+    const rest = targetSlides.slice(first.length);
+    setDeckSlides(targetSlides);
     setRoundSlides(first);
     setQueue(rest);
     setStudyRound(1);
@@ -50,9 +80,32 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     setCurrentIdx(0);
     setUserAnswers({});
     setLocked({});
-    setResultText(null);
+    setStudyStats(createInitialStudyStats(metas));
+    setCompleted(false);
+    completedRef.current = false;
+    recordedInRoundRef.current = {};
     setAutoNextKey(null);
-  }, [slides]);
+  }, []);
+
+  const deckSigRef = useRef("");
+  useLayoutEffect(() => {
+    const sig = slides.map((s) => s.item.id).join("|");
+    if (!sig || sig === deckSigRef.current) return;
+    deckSigRef.current = sig;
+    initSession(slides);
+  }, [slides, initSession]);
+
+  const recordAttempt = useCallback((s: SimilarSlide, pickedLetters: string[]) => {
+    const id = s.item.id;
+    if (recordedInRoundRef.current[id]) return;
+    recordedInRoundRef.current[id] = true;
+    const user = userPickToSet(pickedLetters);
+    const isCorrect = setsEqual(user, s.item.answer);
+    const pickedLabel =
+      pickedLetters.length > 0 ? [...pickedLetters].sort().join(", ") : "(bỏ trống)";
+    const meta = metaMapRef.current[id] ?? buildSimilarMeta(s, 0);
+    setStudyStats((prev) => recordStudyAttemptInMap(prev, meta, isCorrect, pickedLabel));
+  }, []);
 
   const slide = roundSlides[currentIdx];
   const item = slide?.item;
@@ -63,13 +116,18 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
   const answeredCorrectly = item ? setsEqual(currentUserSet, currentCorrectSet) : false;
 
   const submitSimilarRound = useCallback(() => {
+    if (completedRef.current) return;
     const round = roundRef.current;
     const qrest = queueRef.current;
     if (!round.length) return;
 
     const wrongSlides: SimilarSlide[] = [];
     for (const s of round) {
-      const user = userPickToSet(userAnswersRef.current[s.item.id]);
+      const picked = userAnswersRef.current[s.item.id] ?? [];
+      if (!recordedInRoundRef.current[s.item.id]) {
+        recordAttempt(s, picked);
+      }
+      const user = userPickToSet(picked);
       if (!setsEqual(user, s.item.answer)) wrongSlides.push(s);
     }
     setWrongInLastRound(wrongSlides.length);
@@ -77,20 +135,15 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     const nextQueue = [...wrongSlides, ...qrest];
     const finishedAll = nextQueue.length === 0;
     if (finishedAll) {
-      const total = totalDeckRef.current;
-      const remainUnique = new Set(nextQueue).size;
-      const masteredUnique = Math.max(0, total - remainUnique);
-      const msg =
-        `Hoàn thành cả bộ same-question.\n` +
-        `- Lượt cuối sai: ${wrongSlides.length} câu\n` +
-        `- Nắm chắc: ${masteredUnique}/${total} câu\n` +
-        `- Còn cần ôn: ${remainUnique} câu`;
-      setResultText(msg);
+      setAutoNextKey(null);
+      setCompleted(true);
+      completedRef.current = true;
       return;
     }
 
     const nextRound = nextQueue.slice(0, SIMILAR_BATCH_SIZE);
     const rest = nextQueue.slice(nextRound.length);
+    recordedInRoundRef.current = {};
     setStudyRound((r) => r + 1);
     setRoundSlides(nextRound);
     setQueue(rest);
@@ -102,59 +155,50 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
       for (const s of nextRound) delete copied[s.item.id];
       return copied;
     });
-  }, []);
+  }, [recordAttempt]);
 
   const restartSession = useCallback(() => {
-    totalDeckRef.current = slides.length;
-    const first = slides.slice(0, SIMILAR_BATCH_SIZE);
-    const rest = slides.slice(first.length);
-    setRoundSlides(first);
-    setQueue(rest);
-    setStudyRound(1);
-    setWrongInLastRound(0);
-    setCurrentIdx(0);
-    setUserAnswers({});
-    setLocked({});
-    setResultText(null);
-    setAutoNextKey(null);
-  }, [slides]);
+    initSession(slides);
+  }, [slides, initSession]);
 
   const saveSingle = useCallback(
     (letter: string) => {
-      const it = roundSlides[currentIdx]?.item;
-      if (!it || lockedRef.current[it.id]) return;
+      const curSlide = roundSlides[currentIdx];
+      const it = curSlide?.item;
+      if (!curSlide || !it || lockedRef.current[it.id]) return;
+      const picked = letter ? [letter.toUpperCase()] : [];
       setUserAnswers((prev) => ({
         ...prev,
-        [it.id]: letter ? [letter.toUpperCase()] : [],
+        [it.id]: picked,
       }));
       setLocked((prev) => ({ ...prev, [it.id]: true }));
+      recordAttempt(curSlide, picked);
       setAutoNextKey(Date.now());
     },
-    [roundSlides, currentIdx]
+    [roundSlides, currentIdx, recordAttempt]
   );
 
   const toggleMulti = useCallback(
     (letter: string) => {
-      const it = roundSlides[currentIdx]?.item;
-      if (!it || lockedRef.current[it.id]) return;
+      const curSlide = roundSlides[currentIdx];
+      const it = curSlide?.item;
+      if (!curSlide || !it || lockedRef.current[it.id]) return;
       const upper = letter.toUpperCase();
       const chooseCount = it.chooseCount ?? 1;
-      setUserAnswers((prev) => {
-        const cur = new Set(prev[it.id] ?? []);
-        if (cur.has(upper)) cur.delete(upper);
-        else cur.add(upper);
-        if (cur.size >= chooseCount) {
-          queueMicrotask(() => {
-            setLocked((lk) => ({ ...lk, [it.id]: true }));
-            setAutoNextKey(Date.now());
-          });
-        } else {
-          queueMicrotask(() => setAutoNextKey(null));
-        }
-        return { ...prev, [it.id]: [...cur].sort() };
-      });
+      const cur = new Set(userAnswersRef.current[it.id] ?? []);
+      if (cur.has(upper)) cur.delete(upper);
+      else cur.add(upper);
+      const nextList = [...cur].sort();
+      setUserAnswers((prev) => ({ ...prev, [it.id]: nextList }));
+      if (cur.size >= chooseCount) {
+        setLocked((lk) => ({ ...lk, [it.id]: true }));
+        recordAttempt(curSlide, nextList);
+        setAutoNextKey(Date.now());
+      } else {
+        setAutoNextKey(null);
+      }
     },
-    [roundSlides, currentIdx]
+    [roundSlides, currentIdx, recordAttempt]
   );
 
   const goPrev = () => {
@@ -172,15 +216,15 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
   }, [currentIdx, roundSlides.length, submitSimilarRound]);
 
   useEffect(() => {
-    if (autoNextKey === null) return;
+    if (autoNextKey === null || completed) return;
     const timer = window.setTimeout(() => {
       goNext();
     }, AUTO_NEXT_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [autoNextKey, goNext]);
+  }, [autoNextKey, completed, goNext]);
 
   useEffect(() => {
-    if (!roundSlides.length) return;
+    if (!roundSlides.length || completed) return;
     const maxIdx = roundSlides.length - 1;
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -223,7 +267,35 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [roundSlides, currentIdx, submitSimilarRound, saveSingle, toggleMulti]);
+  }, [roundSlides, completed, currentIdx, submitSimilarRound, saveSingle, toggleMulti]);
+
+  const summary = useMemo(
+    () => computeStudySummary(studyStats, deckSlides.length || slides.length),
+    [studyStats, deckSlides.length, slides.length]
+  );
+
+  const retryWrongSlides = useCallback(() => {
+    const slideById = new Map(slides.map((s) => [s.item.id, s] as const));
+    const wrongSlides = summary.wrongQuestions
+      .map((w) => slideById.get(w.id))
+      .filter((s): s is SimilarSlide => Boolean(s));
+    if (!wrongSlides.length) return;
+    initSession(wrongSlides);
+  }, [slides, summary.wrongQuestions, initSession]);
+
+  if (completed) {
+    return (
+      <StudySummaryScreen
+        examTitle="Ôn câu tương tự · Nhiều bộ đề"
+        totalRounds={studyRound}
+        summary={summary}
+        backLabel="← Chọn chế độ khác"
+        onBack={onBack}
+        onRestartAll={restartSession}
+        onRetryWrong={retryWrongSlides}
+      />
+    );
+  }
 
   if (!item || !slide || !roundSlides.length) return null;
 
@@ -243,9 +315,12 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
           {Math.round(((currentIdx + 1) / Math.max(1, roundSlides.length)) * 100)}% lượt này
         </span>
       </div>
-      <div className="study-note">
-        Sai lượt trước: {wrongInLastRound} câu · Còn chờ ôn: {queue.length} câu
-      </div>
+      <StudyLiveBar
+        summary={summary}
+        wrongInLastRound={wrongInLastRound}
+        queueLength={queue.length}
+        studyRound={studyRound}
+      />
       <p className="question-title">{item.question}</p>
       <p className="choose-hint">
         {item.chooseCount === 1 ? "Chọn 1 đáp án" : `Chọn ${item.chooseCount} đáp án`}
@@ -382,23 +457,6 @@ export function SimilarQuizPanel({ slides, onBack }: Props) {
           được ưu tiên ở lượt sau. Sau khi chọn đáp án mới hiện gợi ý khác biệt.
         </span>
       </div>
-
-      {resultText && (
-        <div className="modal-overlay" role="dialog" aria-modal="true">
-          <div className="modal">
-            <h2 style={{ marginTop: 0 }}>Kết quả</h2>
-            <pre>{resultText}</pre>
-            <div className="quiz-nav-footer__right" style={{ marginTop: 12 }}>
-              <button type="button" className="btn-submit-grade" onClick={restartSession}>
-                Làm lại
-              </button>
-              <button type="button" className="btn-primary" onClick={() => setResultText(null)}>
-                Đóng
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

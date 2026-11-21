@@ -1,6 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RandomQuizSection } from "./RandomQuizSection";
 import { SimilarQuizPanel } from "./SimilarQuizPanel";
+import { StudyLiveBar, StudySummaryScreen } from "./StudySummaryView";
+import {
+  computeStudySummary,
+  createInitialStudyStats,
+  recordStudyAttemptInMap,
+  type StudyQuestionMeta,
+  type StudyStatsMap,
+} from "./studyStats";
 import "./App.css";
 import type { QuestionsMap } from "./parseQuiz";
 import {
@@ -68,6 +76,29 @@ function apiUrl(path: string) {
 
 function userPickToSet(pick: string[] | undefined): Set<string> {
   return new Set((pick ?? []).map((x) => x.toUpperCase()));
+}
+
+function buildStudyQuestionMeta(
+  num: number,
+  order: number,
+  qsMap: QuestionsMap,
+  ansMap: Map<number, Set<string>>
+): StudyQuestionMeta {
+  const q = qsMap[num];
+  const keySet = ansMap.get(num) ?? new Set<string>();
+  const correctAnswers = [...keySet]
+    .sort()
+    .map((k) => {
+      const optText = q?.options.find(([opt]) => opt === k)?.[1] ?? "";
+      return optText ? `${k}. ${optText}` : k;
+    });
+  return {
+    id: String(num),
+    label: `Q${num}`,
+    question: q?.question ?? "",
+    correctAnswers,
+    order,
+  };
 }
 
 function normalizeTfText(raw: string): string {
@@ -164,10 +195,18 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   const [answerVisible, setAnswerVisible] = useState(false);
   const [resultText, setResultText] = useState<string | null>(null);
   const [studyRound, setStudyRound] = useState(1);
+  const [studyDeckNums, setStudyDeckNums] = useState<number[]>([]);
   const [studyRoundNums, setStudyRoundNums] = useState<number[]>([]);
   const [studyQueue, setStudyQueue] = useState<number[]>([]);
   const [studyWrongInLastRound, setStudyWrongInLastRound] = useState(0);
   const [studyLocked, setStudyLocked] = useState<Record<number, boolean>>({});
+  const [studyStats, setStudyStats] = useState<StudyStatsMap>({});
+  const [studyCompleted, setStudyCompleted] = useState(false);
+  const studyRecordedInRoundRef = useRef<Record<number, boolean>>({});
+  const questionsRef = useRef<QuestionsMap>(questions);
+  questionsRef.current = questions;
+  const answerKeyRef = useRef<Map<number, Set<string>>>(answerKey);
+  answerKeyRef.current = answerKey;
   const [autoNextKey, setAutoNextKey] = useState<number | null>(null);
 
   const [similarSlides, setSimilarSlides] = useState<SimilarSlide[]>([]);
@@ -181,6 +220,8 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
         setError("Không có câu nào khớp giữa đề và đáp án (kiểm tra số thứ tự câu).");
         return null;
       }
+      questionsRef.current = qs;
+      answerKeyRef.current = ans;
       setQuestions(qs);
       setAnswerKey(ans);
       setAllQNumbers(nums);
@@ -191,10 +232,14 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
       setFlashIdx(0);
       setAnswerVisible(false);
       setStudyRound(1);
+      setStudyDeckNums([]);
       setStudyRoundNums([]);
       setStudyQueue([]);
       setStudyWrongInLastRound(0);
       setStudyLocked({});
+      setStudyStats({});
+      setStudyCompleted(false);
+      studyRecordedInRoundRef.current = {};
       setAutoNextKey(null);
       setError(null);
       return nums;
@@ -205,14 +250,22 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   const startStudySession = useCallback((nums: number[]) => {
     const initialRound = nums.slice(0, STUDY_BATCH_SIZE);
     const rest = nums.slice(initialRound.length);
+    const qsMap = questionsRef.current;
+    const ansMap = answerKeyRef.current;
+    const metas = nums.map((n, idx) => buildStudyQuestionMeta(n, idx, qsMap, ansMap));
     setStudyRound(1);
+    setStudyDeckNums(nums);
     setStudyRoundNums(initialRound);
     setStudyQueue(rest);
     setStudyWrongInLastRound(0);
     setCurrentIdx(0);
     setUserAnswers({});
     setStudyLocked({});
+    setStudyStats(createInitialStudyStats(metas));
+    setStudyCompleted(false);
+    studyRecordedInRoundRef.current = {};
     setAutoNextKey(null);
+    setResultText(null);
     setView("study");
   }, []);
 
@@ -364,12 +417,32 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     setAutoNextKey(null);
   };
 
+  const recordStudyAttempt = useCallback(
+    (num: number, pickedLetters: string[]) => {
+      if (studyRecordedInRoundRef.current[num]) return;
+      studyRecordedInRoundRef.current[num] = true;
+      const qsMap = questionsRef.current;
+      const ansMap = answerKeyRef.current;
+      const key = ansMap.get(num) ?? new Set<string>();
+      const user = userPickToSet(pickedLetters);
+      const isCorrect = setsEqual(user, key);
+      const pickedLabel =
+        pickedLetters.length > 0 ? [...pickedLetters].sort().join(", ") : "(bỏ trống)";
+      const order = Math.max(0, studyDeckNums.indexOf(num));
+      const meta = buildStudyQuestionMeta(num, order, qsMap, ansMap);
+      setStudyStats((prev) => recordStudyAttemptInMap(prev, meta, isCorrect, pickedLabel));
+    },
+    [studyDeckNums]
+  );
+
   const saveSingle = (letter: string) => {
     if (qNum === undefined) return;
     if (view === "study" && studyLocked[qNum]) return;
-    setUserAnswers((prev) => ({ ...prev, [qNum]: letter ? [letter.toUpperCase()] : [] }));
+    const picked = letter ? [letter.toUpperCase()] : [];
+    setUserAnswers((prev) => ({ ...prev, [qNum]: picked }));
     if (view === "study") {
       setStudyLocked((prev) => ({ ...prev, [qNum]: true }));
+      recordStudyAttempt(qNum, picked);
     }
     triggerAutoNext();
   };
@@ -379,20 +452,20 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     if (view === "study" && studyLocked[qNum]) return;
     const upper = letter.toUpperCase();
     const chooseCount = currentQ?.chooseCount ?? 1;
-    setUserAnswers((prev) => {
-      const cur = new Set(prev[qNum] ?? []);
-      if (cur.has(upper)) cur.delete(upper);
-      else cur.add(upper);
-      if (cur.size >= chooseCount) {
-        if (view === "study") {
-          setStudyLocked((locked) => ({ ...locked, [qNum]: true }));
-        }
-        triggerAutoNext();
-      } else {
-        setAutoNextKey(null);
+    const cur = new Set(userAnswers[qNum] ?? []);
+    if (cur.has(upper)) cur.delete(upper);
+    else cur.add(upper);
+    const nextList = [...cur].sort();
+    setUserAnswers((prev) => ({ ...prev, [qNum]: nextList }));
+    if (cur.size >= chooseCount) {
+      if (view === "study") {
+        setStudyLocked((locked) => ({ ...locked, [qNum]: true }));
+        recordStudyAttempt(qNum, nextList);
       }
-      return { ...prev, [qNum]: [...cur].sort() };
-    });
+      triggerAutoNext();
+    } else {
+      setAutoNextKey(null);
+    }
   };
 
   const goPrev = () => {
@@ -433,11 +506,15 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
   };
 
   const submitStudyRound = () => {
-    if (!studyRoundNums.length) return;
+    if (!studyRoundNums.length || studyCompleted) return;
 
     const wrongNums: number[] = [];
     for (const num of studyRoundNums) {
-      const user = userPickToSet(userAnswers[num]);
+      const picked = userAnswers[num] ?? [];
+      if (!studyRecordedInRoundRef.current[num]) {
+        recordStudyAttempt(num, picked);
+      }
+      const user = userPickToSet(picked);
       const key = answerKey.get(num) ?? new Set<string>();
       if (!setsEqual(user, key)) wrongNums.push(num);
     }
@@ -447,19 +524,14 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     const nextQueue = [...wrongNums, ...studyQueue];
     const finishedAll = nextQueue.length === 0;
     if (finishedAll) {
-      const remainUnique = new Set(nextQueue).size;
-      const masteredUnique = Math.max(0, qNumbers.length - remainUnique);
-      const msg =
-        `Hoàn thành toàn bộ đề.\n` +
-        `- Lượt cuối sai: ${wrongNums.length} câu\n` +
-        `- Nắm chắc: ${masteredUnique}/${qNumbers.length} câu\n` +
-        `- Còn cần ôn: ${remainUnique} câu`;
-      setResultText(msg);
+      setAutoNextKey(null);
+      setStudyCompleted(true);
       return;
     }
 
     const nextRoundNums = nextQueue.slice(0, STUDY_BATCH_SIZE);
     const rest = nextQueue.slice(nextRoundNums.length);
+    studyRecordedInRoundRef.current = {};
     setStudyRound((r) => r + 1);
     setStudyRoundNums(nextRoundNums);
     setStudyQueue(rest);
@@ -539,6 +611,7 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
 
   useEffect(() => {
     if (view !== "quiz" && view !== "flashcard" && view !== "study") return;
+    if (view === "study" && studyCompleted) return;
     const navCount = view === "study" ? studyRoundNums.length : qNumbers.length;
     const maxIdx = Math.max(0, navCount - 1);
     const onKey = (e: KeyboardEvent) => {
@@ -588,7 +661,20 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view, qNumbers.length, studyRoundNums.length, currentIdx, submitStudyRound]);
+  }, [view, studyCompleted, qNumbers.length, studyRoundNums.length, currentIdx, submitStudyRound]);
+
+  const studySummary = useMemo(
+    () => computeStudySummary(studyStats, studyDeckNums.length || qNumbers.length),
+    [studyStats, studyDeckNums.length, qNumbers.length]
+  );
+
+  const retryStudyWrongQuestions = () => {
+    const wrongNums = studySummary.wrongQuestions
+      .map((item) => Number(item.id))
+      .filter((n) => !Number.isNaN(n));
+    if (!wrongNums.length) return;
+    startStudySession(wrongNums);
+  };
 
   const flashQNum = qNumbers[flashIdx];
   const flashData = flashQNum !== undefined ? questions[flashQNum] : undefined;
@@ -961,7 +1047,18 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
         </>
       )}
 
-      {(view === "quiz" || view === "study") && currentQ && qNum !== undefined && (
+      {view === "study" && studyCompleted && (
+        <StudySummaryScreen
+          examTitle={activeExamName}
+          totalRounds={studyRound}
+          summary={studySummary}
+          onBack={() => setView("setup")}
+          onRestartAll={restartCurrentPractice}
+          onRetryWrong={retryStudyWrongQuestions}
+        />
+      )}
+
+      {(view === "quiz" || (view === "study" && !studyCompleted)) && currentQ && qNum !== undefined && (
         <div className="quiz-panel">
           <div className="back-link quiz-back">
             <button type="button" onClick={() => setView("setup")}>
@@ -981,9 +1078,12 @@ export default function App({ onActiveExamChange }: { onActiveExamChange?: (name
             </span>
           </div>
           {view === "study" && (
-            <div className="study-note">
-              Sai lượt trước: {studyWrongInLastRound} câu · Còn chờ ôn: {studyQueue.length} câu
-            </div>
+            <StudyLiveBar
+              summary={studySummary}
+              wrongInLastRound={studyWrongInLastRound}
+              queueLength={studyQueue.length}
+              studyRound={studyRound}
+            />
           )}
           <p className="question-title">{currentQ.question}</p>
           <p className="choose-hint">
